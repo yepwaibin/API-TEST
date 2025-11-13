@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>API 测试 iframe</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
+    />
+    <style>
+      body {
+        margin: 0;
+        font-family: 'SFMono-Regular', Menlo, Monaco, 'Courier New', monospace;
+        background: linear-gradient(180deg, #f7f9ff 0%, #eef2ff 100%);
+        color: #1f2328;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        padding: 32px 24px;
+      }
+      h1 {
+        margin: 0 0 16px;
+        font-size: 20px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #6d74ff;
+      }
+      .panel {
+        width: min(560px, 100%);
+        padding: 24px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid rgba(108, 120, 255, 0.2);
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+      }
+      .panel h2 {
+        margin: 0 0 12px;
+        font-size: 16px;
+        letter-spacing: 0.04em;
+        color: #afb2ff;
+      }
+      pre {
+        margin: 0;
+        padding: 16px;
+        border-radius: 12px;
+        background: rgba(240, 244, 255, 0.9);
+        backdrop-filter: blur(4px);
+        color: #273043;
+        border: 1px solid rgba(99, 108, 255, 0.18);
+        overflow: auto;
+        max-height: 320px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .meta {
+        margin-top: 12px;
+        font-size: 12px;
+        color: #596179;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Iframe 监听器</h1>
+    <div class="panel">
+      <h2>最近请求</h2>
+      <pre id="requestLog">尚未收到请求</pre>
+      <div class="meta" id="metaInfo"></div>
+    </div>
+
+    <script>
+      const logEl = document.getElementById('requestLog')
+      const metaEl = document.getElementById('metaInfo')
+
+      const respond = (message, origin, source) => {
+        const payload = {
+          type: 'api-test/response',
+          id: message.id,
+          payload: {
+            status: 'ok',
+            echo: message,
+            processedAt: new Date().toISOString(),
+            hint: '自定义逻辑：可在此处调用实际前端 API'
+          }
+        }
+
+        source.postMessage(payload, origin)
+      }
+
+      window.addEventListener('message', (event) => {
+        const { data, origin, source } = event
+        if (!data || typeof data !== 'object') return
+        if (data.type !== 'api-test/request') return
+        if (!source || typeof source.postMessage !== 'function') return
+
+        const pretty = JSON.stringify(data, null, 2)
+        logEl.textContent = pretty
+        metaEl.textContent = `来自：${origin} · 时间：${new Date().toLocaleTimeString()}`
+
+        respond(data, origin, source)
+      })
+    </script>
+  </body>
+</html>
+
