@@ -8,6 +8,7 @@ import {
   watch,
 } from "vue";
 import { apiCatalog } from "./data/apiCatalog";
+import JsonEditor from "./components/JsonEditor.vue";
 
 const catalog = apiCatalog;
 
@@ -18,8 +19,8 @@ const selectedApiName = ref(catalog[0]?.apis?.[0]?.name ?? null);
 const requestName = ref(selectedApiName.value ?? "");
 const paramRows = ref([]);
 const paramsMode = ref("table");
-const paramsJson = ref("{}");
 const paramsError = ref("");
+const paramsObject = ref({});
 const notes = ref("");
 const responseState = reactive({
   isWaiting: false,
@@ -56,6 +57,9 @@ const formattedResponse = computed(() => {
   }
 });
 
+const isPlainObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
 const rowsToPlainObject = () => {
   const params = {};
   paramRows.value.forEach(({ name, value }) => {
@@ -67,49 +71,30 @@ const rowsToPlainObject = () => {
   return params;
 };
 
-const syncParamsJsonFromRows = () => {
-  const plain = rowsToPlainObject();
-  paramsJson.value = JSON.stringify(plain, null, 2);
+const syncParamsObjectFromRows = () => {
+  paramsObject.value = rowsToPlainObject();
   paramsError.value = "";
 };
 
-const syncRowsFromJson = (jsonString) => {
-  if (!jsonString.trim()) {
-    paramRows.value = [
-      {
-        name: "",
-        value: "",
-      },
-    ];
-    paramsError.value = "";
-    return {};
-  }
+const applyObjectToRows = (input) => {
+  const source = isPlainObject(input) ? input : {};
+  const rows = Object.entries(source).map(([name, value]) => ({
+    name,
+    value:
+      typeof value === "object" && value !== null
+        ? JSON.stringify(value)
+        : value ?? "",
+  }));
 
-  try {
-    const parsed = JSON.parse(jsonString);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("JSON 必须是对象格式");
-    }
-
-    const rows = Object.entries(parsed).map(([name, value]) => ({
-      name,
-      value: typeof value === "object" ? JSON.stringify(value) : value ?? "",
-    }));
-
-    if (!rows.length) {
-      rows.push({
-        name: "",
-        value: "",
-      });
-    }
-
-    paramRows.value = rows;
-    paramsError.value = "";
-    return parsed;
-  } catch (error) {
-    paramsError.value = `JSON 解析失败：${error.message}`;
-    return null;
-  }
+  paramRows.value =
+    rows.length > 0
+      ? rows
+      : [
+          {
+            name: "",
+            value: "",
+          },
+        ];
 };
 
 const initializeParams = () => {
@@ -126,9 +111,7 @@ const initializeParams = () => {
     });
   }
 
-  if (paramsMode.value === "json") {
-    syncParamsJsonFromRows();
-  }
+  syncParamsObjectFromRows();
 };
 
 const resetResponse = () => {
@@ -188,29 +171,58 @@ const removeParamRow = (index) => {
 const setParamsMode = (mode) => {
   if (paramsMode.value === mode) return;
   if (mode === "json") {
-    syncParamsJsonFromRows();
+    syncParamsObjectFromRows();
     paramsMode.value = mode;
   } else {
-    const parsed = syncRowsFromJson(paramsJson.value);
-    if (parsed !== null) {
-      paramsMode.value = mode;
+    if (!isPlainObject(paramsObject.value)) {
+      paramsError.value = "JSON 根节点必须是对象类型";
+      return;
     }
+    applyObjectToRows(paramsObject.value);
+    paramsError.value = "";
+    paramsMode.value = mode;
   }
 };
 
 const resolveParamsForRequest = () => {
   if (paramsMode.value === "json") {
-    const parsed = syncRowsFromJson(paramsJson.value);
-    if (parsed === null) {
-      responseState.body = "参数 JSON 解析失败，请检查输入。";
+    if (paramsError.value) {
+      responseState.body = paramsError.value;
       responseState.isWaiting = false;
       return null;
     }
+    if (!isPlainObject(paramsObject.value)) {
+      const message = "JSON 根节点必须是对象类型";
+      paramsError.value = message;
+      responseState.body = message;
+      responseState.isWaiting = false;
+      return null;
+    }
+    applyObjectToRows(paramsObject.value);
     paramsError.value = "";
-    return parsed;
+    return paramsObject.value;
   }
   paramsError.value = "";
-  return rowsToPlainObject();
+  const payload = rowsToPlainObject();
+  paramsObject.value = payload;
+  return payload;
+};
+
+const handleJsonChange = (value) => {
+  if (!isPlainObject(value)) {
+    paramsError.value = "JSON 根节点必须是对象类型";
+    return;
+  }
+  paramsObject.value = value;
+  paramsError.value = "";
+};
+
+const handleJsonError = (error) => {
+  if (error) {
+    paramsError.value = error.message ?? String(error);
+  } else {
+    paramsError.value = "";
+  }
 };
 
 const handleSend = () => {
@@ -288,6 +300,16 @@ watch(
 watch(
   () => selectedCategoryKey.value,
   (key) => ensureGroupExpanded(key)
+);
+
+watch(
+  paramRows,
+  () => {
+    if (paramsMode.value === "table") {
+      syncParamsObjectFromRows();
+    }
+  },
+  { deep: true }
 );
 </script>
 
@@ -404,11 +426,12 @@ watch(
           </table>
         </template>
         <div v-else class="params-json">
-          <textarea
-            v-model="paramsJson"
+          <JsonEditor
+            v-model="paramsObject"
             class="params-json-editor"
-            spellcheck="false"
-            placeholder='{"key": "value"}'
+            mode="code"
+            @change="handleJsonChange"
+            @error="handleJsonError"
           />
           <p v-if="paramsError" class="params-error">
             {{ paramsError }}
@@ -674,22 +697,20 @@ watch(
 
 .params-json-editor {
   width: 100%;
-  min-height: 220px;
-  padding: 16px 18px;
-  border-radius: 12px;
-  border: 1px solid #ccd4e8;
+  min-height: 260px;
+  display: block;
+}
+
+.params-json-editor :deep(.jsoneditor) {
+  border: none;
+  font-family: "JetBrains Mono", Menlo, Monaco, "Courier New", monospace;
   background: #f8faff;
-  color: #1f2328;
-  resize: vertical;
+}
+
+.params-json-editor :deep(.ace_editor) {
   font-family: "JetBrains Mono", Menlo, Monaco, "Courier New", monospace;
   font-size: 13px;
   line-height: 1.6;
-  box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.08);
-}
-
-.params-json-editor:focus {
-  outline: 2px solid rgba(92, 124, 250, 0.25);
-  outline-offset: 2px;
 }
 
 .params-error {
