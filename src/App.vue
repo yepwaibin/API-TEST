@@ -541,13 +541,6 @@ export default {
         </div>
       </section>
 
-      <section class="notes-section">
-        <header class="section-header">
-          <h3>备注</h3>
-        </header>
-        <textarea v-model="notes" placeholder="可选：为此次请求添加备注..." />
-      </section>
-
       <section class="response-section">
         <header class="section-header">
           <h3>响应结果</h3>
@@ -582,7 +575,7 @@ export default {
 <style scoped>
 .workspace {
   display: grid;
-  grid-template-columns: 280px 1fr 420px;
+  grid-template-columns: 200px 1fr 1.5fr;
   grid-template-rows: 100vh;
   color: #1f2328;
   background: #f5f7fb;
