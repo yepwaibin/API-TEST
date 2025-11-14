@@ -2,122 +2,118 @@
   <div ref="container" class="json-editor-container"></div>
 </template>
 
-<script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+<script>
 import JSONEditor from "jsoneditor";
 import "jsoneditor/dist/jsoneditor.css";
 
-const props = defineProps({
-  modelValue: {
-    type: [Object, Array],
-    default: () => ({}),
+export default {
+  name: "JsonEditor",
+  props: {
+    modelValue: {
+      type: [Object, Array],
+      default: () => ({}),
+    },
+    mode: {
+      type: String,
+      default: "code",
+    },
   },
-  mode: {
-    type: String,
-    default: "code",
+  emits: ["update:modelValue", "change", "error"],
+  data() {
+    return {
+      editorInstance: null,
+      lastSerializedValue: "",
+    };
   },
-});
-
-const emit = defineEmits(["update:modelValue", "change", "error"]);
-
-const container = ref(null);
-let editorInstance = null;
-let lastSerializedValue = "";
-
-const serialize = (value) => {
-  try {
-    return JSON.stringify(value);
-  } catch (error) {
-    return "";
-  }
-};
-
-const initializeEditor = () => {
-  if (!container.value) return;
-
-  const options = {
-    mode: props.mode,
-    modes: ["code", "tree", "view"],
-    mainMenuBar: true,
-    statusBar: true,
-    navigationBar: true,
-    onChange() {
-      if (!editorInstance) return;
+  watch: {
+    modelValue: {
+      handler(value) {
+        if (!this.editorInstance) return;
+        const incoming = value ?? {};
+        const serialized = this.serialize(incoming);
+        if (serialized === this.lastSerializedValue) {
+          return;
+        }
+        try {
+          this.editorInstance.update(incoming);
+          this.lastSerializedValue = serialized;
+        } catch (error) {
+          this.$emit("error", error);
+        }
+      },
+      deep: true,
+    },
+    mode(mode) {
+      if (!this.editorInstance || !mode) return;
       try {
-        const currentValue = editorInstance.get();
-        lastSerializedValue = serialize(currentValue);
-        emit("update:modelValue", currentValue);
-        emit("change", currentValue);
-        emit("error", null);
+        this.editorInstance.setMode(mode);
       } catch (error) {
-        emit("error", error);
+        this.$emit("error", error);
       }
     },
-    onError(error) {
-      emit("error", error);
-    },
-    onValidationError(errors) {
-      if (errors && errors.length) {
-        emit("error", new Error(errors[0].message));
-      } else {
-        emit("error", null);
-      }
-    },
-  };
-
-  editorInstance = new JSONEditor(
-    container.value,
-    options,
-    props.modelValue ?? {}
-  );
-  lastSerializedValue = serialize(props.modelValue ?? {});
-};
-
-const destroyEditor = () => {
-  if (editorInstance) {
-    editorInstance.destroy();
-    editorInstance = null;
-  }
-};
-
-onMounted(() => {
-  initializeEditor();
-});
-
-onBeforeUnmount(() => {
-  destroyEditor();
-});
-
-watch(
-  () => props.modelValue,
-  (value) => {
-    if (!editorInstance) return;
-    const incoming = value ?? {};
-    const serialized = serialize(incoming);
-    if (serialized === lastSerializedValue) {
-      return;
-    }
-    try {
-      editorInstance.update(incoming);
-      lastSerializedValue = serialized;
-    } catch (error) {
-      emit("error", error);
-    }
   },
-  { deep: true }
-);
+  mounted() {
+    this.initializeEditor();
+  },
+  beforeUnmount() {
+    this.destroyEditor();
+  },
+  methods: {
+    serialize(value) {
+      try {
+        return JSON.stringify(value);
+      } catch (error) {
+        return "";
+      }
+    },
+    initializeEditor() {
+      if (!this.$refs.container) return;
 
-watch(
-  () => props.mode,
-  (mode) => {
-    if (!editorInstance || !mode) return;
-    try {
-      editorInstance.setMode(mode);
-    } catch (error) {
-      emit("error", error);
-    }
-  }
-);
+      const options = {
+        mode: this.mode,
+        modes: ["code", "tree", "view"],
+        mainMenuBar: true,
+        statusBar: true,
+        navigationBar: true,
+        onChange: () => {
+          if (!this.editorInstance) return;
+          try {
+            const currentValue = this.editorInstance.get();
+            this.lastSerializedValue = this.serialize(currentValue);
+            this.$emit("update:modelValue", currentValue);
+            this.$emit("change", currentValue);
+            this.$emit("error", null);
+          } catch (error) {
+            this.$emit("error", error);
+          }
+        },
+        onError: (error) => {
+          this.$emit("error", error);
+        },
+        onValidationError: (errors) => {
+          if (errors && errors.length) {
+            this.$emit("error", new Error(errors[0].message));
+          } else {
+            this.$emit("error", null);
+          }
+        },
+      };
+
+      this.editorInstance = new JSONEditor(
+        this.$refs.container,
+        options,
+        this.modelValue ?? {}
+      );
+      this.lastSerializedValue = this.serialize(this.modelValue ?? {});
+    },
+    destroyEditor() {
+      if (this.editorInstance) {
+        this.editorInstance.destroy();
+        this.editorInstance = null;
+      }
+    },
+  },
+};
 </script>
 
 <style scoped>
@@ -130,4 +126,3 @@ watch(
   box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 </style>
-

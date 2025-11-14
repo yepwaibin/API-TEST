@@ -1,316 +1,418 @@
-<script setup>
-import {
-  computed,
-  onBeforeUnmount,
-  onMounted,
-  reactive,
-  ref,
-  watch,
-} from "vue";
+<script>
 import { apiCatalog } from "./data/apiCatalog";
 import JsonEditor from "./components/JsonEditor.vue";
 
-const catalog = apiCatalog;
-
-const iframeUrl = ref("/mock-frame.html");
-const iframeRef = ref(null);
-const selectedCategoryKey = ref(catalog[0]?.key ?? null);
-const selectedApiName = ref(catalog[0]?.apis?.[0]?.name ?? null);
-const requestName = ref(selectedApiName.value ?? "");
-const paramRows = ref([]);
-const paramsMode = ref("table");
-const paramsError = ref("");
-const paramsObject = ref({});
-const notes = ref("");
-const responseState = reactive({
-  isWaiting: false,
-  body: "",
-  meta: null,
-});
-
-const requestId = ref(null);
-const timingState = reactive({
-  startAt: 0,
-});
-const expandedKeys = ref(
-  selectedCategoryKey.value ? [selectedCategoryKey.value] : []
-);
-
-const selectedCategory = computed(
-  () => catalog.find((group) => group.key === selectedCategoryKey.value) ?? null
-);
-
-const selectedApi = computed(() => {
-  const apiList = selectedCategory.value?.apis ?? [];
-  return apiList.find((api) => api.name === selectedApiName.value) ?? null;
-});
-
-const formattedResponse = computed(() => {
-  if (!responseState.body) {
-    return responseState.isWaiting ? "等待 iframe 响应..." : "尚未发送请求";
-  }
-
-  try {
-    return JSON.stringify(JSON.parse(responseState.body), null, 2);
-  } catch (error) {
-    return responseState.body;
-  }
-});
-
-const isPlainObject = (value) =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
-
-const rowsToPlainObject = () => {
-  const params = {};
-  paramRows.value.forEach(({ name, value }) => {
-    if (name) {
-      params[name] = typeof value === "function" ? value() : value;
-    }
-  });
-
-  return params;
-};
-
-const syncParamsObjectFromRows = () => {
-  paramsObject.value = rowsToPlainObject();
-  paramsError.value = "";
-};
-
-const applyObjectToRows = (input) => {
-  const source = isPlainObject(input) ? input : {};
-  const rows = Object.entries(source).map(([name, value]) => ({
-    name,
-    value:
-      typeof value === "object" && value !== null
-        ? JSON.stringify(value)
-        : value ?? "",
-  }));
-
-  paramRows.value =
-    rows.length > 0
-      ? rows
-      : [
-          {
-            name: "",
-            value: "",
-          },
-        ];
-};
-
-const initializeParams = () => {
-  const defaults = selectedApi.value?.params ?? [];
-  paramRows.value = defaults.map(({ name, value }) => ({
-    name,
-    value: typeof value === "function" ? value() : value,
-  }));
-
-  if (!paramRows.value.length) {
-    paramRows.value.push({
-      name: "",
-      value: "",
-    });
-  }
-
-  syncParamsObjectFromRows();
-};
-
-const resetResponse = () => {
-  responseState.body = "";
-  responseState.meta = null;
-  responseState.isWaiting = false;
-};
-
-const isGroupExpanded = (key) => expandedKeys.value.includes(key);
-
-const toggleGroup = (key) => {
-  const list = [...expandedKeys.value];
-  const index = list.indexOf(key);
-  if (index > -1) {
-    if (list.length > 1) {
-      list.splice(index, 1);
-      expandedKeys.value = list;
-    }
-  } else {
-    list.push(key);
-    expandedKeys.value = list;
-  }
-};
-
-const ensureGroupExpanded = (key) => {
-  if (!key) return;
-  if (!isGroupExpanded(key)) {
-    expandedKeys.value = [...expandedKeys.value, key];
-  }
-};
-
-const handleSelectApi = (categoryKey, apiName) => {
-  if (selectedCategoryKey.value !== categoryKey) {
-    selectedCategoryKey.value = categoryKey;
-  }
-  selectedApiName.value = apiName;
-  requestName.value = apiName;
-  notes.value = "";
-  paramsError.value = "";
-  ensureGroupExpanded(categoryKey);
-  initializeParams();
-  resetResponse();
-};
-
-const addParamRow = () => {
-  paramRows.value.push({
-    name: "",
-    value: "",
-  });
-};
-
-const removeParamRow = (index) => {
-  if (paramRows.value.length === 1) return;
-  paramRows.value.splice(index, 1);
-};
-
-const setParamsMode = (mode) => {
-  if (paramsMode.value === mode) return;
-  if (mode === "json") {
-    syncParamsObjectFromRows();
-    paramsMode.value = mode;
-  } else {
-    if (!isPlainObject(paramsObject.value)) {
-      paramsError.value = "JSON 根节点必须是对象类型";
-      return;
-    }
-    applyObjectToRows(paramsObject.value);
-    paramsError.value = "";
-    paramsMode.value = mode;
-  }
-};
-
-const resolveParamsForRequest = () => {
-  if (paramsMode.value === "json") {
-    if (paramsError.value) {
-      responseState.body = paramsError.value;
-      responseState.isWaiting = false;
-      return null;
-    }
-    if (!isPlainObject(paramsObject.value)) {
-      const message = "JSON 根节点必须是对象类型";
-      paramsError.value = message;
-      responseState.body = message;
-      responseState.isWaiting = false;
-      return null;
-    }
-    applyObjectToRows(paramsObject.value);
-    paramsError.value = "";
-    return paramsObject.value;
-  }
-  paramsError.value = "";
-  const payload = rowsToPlainObject();
-  paramsObject.value = payload;
-  return payload;
-};
-
-const handleJsonChange = (value) => {
-  if (!isPlainObject(value)) {
-    paramsError.value = "JSON 根节点必须是对象类型";
-    return;
-  }
-  paramsObject.value = value;
-  paramsError.value = "";
-};
-
-const handleJsonError = (error) => {
-  if (error) {
-    paramsError.value = error.message ?? String(error);
-  } else {
-    paramsError.value = "";
-  }
-};
-
-const handleSend = () => {
-  const frameWindow = iframeRef.value?.contentWindow;
-  if (!frameWindow) {
-    responseState.body = "iframe 未加载，请稍后重试。";
-    responseState.isWaiting = false;
-    return;
-  }
-
-  const params = resolveParamsForRequest();
-  if (params === null) {
-    return;
-  }
-
-  requestId.value = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  responseState.isWaiting = true;
-  responseState.body = "";
-
-  timingState.startAt = performance.now();
-  responseState.meta = {
-    startedAt: new Date().toISOString(),
-    durationMs: null,
-  };
-
-  const payload = {
-    type: "api-test/request",
-    id: requestId.value,
-    api: requestName.value || selectedApi.value?.name,
-    category: selectedCategory.value?.key,
-    notes: notes.value,
-    params,
-  };
-
-  frameWindow.postMessage(payload, "*");
-};
-
-const handleMessage = (event) => {
-  const data = event.data;
-  if (!data || typeof data !== "object") return;
-
-  if (data.type !== "api-test/response") return;
-  if (!requestId.value || data.id !== requestId.value) return;
-
-  responseState.isWaiting = false;
-  responseState.meta = {
-    startedAt: responseState.meta?.startedAt ?? null,
-    origin: event.origin,
-    receivedAt: new Date().toISOString(),
-    durationMs: Math.round(performance.now() - timingState.startAt),
-  };
-
-  responseState.body =
-    typeof data.payload === "string"
-      ? data.payload
-      : JSON.stringify(data.payload, null, 2);
-};
-
-onMounted(() => {
-  initializeParams();
-  window.addEventListener("message", handleMessage);
-});
-
-onBeforeUnmount(() => {
-  window.removeEventListener("message", handleMessage);
-});
-
-watch(
-  () => selectedApiName.value,
-  () => {
-    requestName.value = selectedApi.value?.name ?? "";
-  }
-);
-
-watch(
-  () => selectedCategoryKey.value,
-  (key) => ensureGroupExpanded(key)
-);
-
-watch(
-  paramRows,
-  () => {
-    if (paramsMode.value === "table") {
-      syncParamsObjectFromRows();
-    }
+export default {
+  name: "App",
+  components: {
+    JsonEditor,
   },
-  { deep: true }
-);
+  data() {
+    const catalog = apiCatalog;
+    const initialCategoryKey = catalog[0]?.key ?? null;
+    const initialApiName = catalog[0]?.apis?.[0]?.name ?? null;
+
+    return {
+      catalog,
+      iframeUrl: "/mock-frame.html",
+      iframeRef: null,
+      selectedCategoryKey: initialCategoryKey,
+      selectedApiName: initialApiName,
+      requestName: initialApiName ?? "",
+      paramRows: [],
+      paramsMode: "table",
+      paramsError: "",
+      paramsObject: {},
+      notes: "",
+      responseState: {
+        isWaiting: false,
+        body: "",
+        meta: null,
+      },
+      requestId: null,
+      timingState: {
+        startAt: 0,
+      },
+      expandedKeys: initialCategoryKey ? [initialCategoryKey] : [],
+    };
+  },
+  computed: {
+    selectedCategory() {
+      return (
+        this.catalog.find((group) => group.key === this.selectedCategoryKey) ??
+        null
+      );
+    },
+    selectedApi() {
+      const apiList = this.selectedCategory?.apis ?? [];
+      return apiList.find((api) => api.name === this.selectedApiName) ?? null;
+    },
+    formattedResponse() {
+      if (!this.responseState.body) {
+        return this.responseState.isWaiting
+          ? "等待 iframe 响应..."
+          : "尚未发送请求";
+      }
+
+      try {
+        return JSON.stringify(JSON.parse(this.responseState.body), null, 2);
+      } catch (error) {
+        return this.responseState.body;
+      }
+    },
+  },
+  watch: {
+    selectedApiName() {
+      this.requestName = this.selectedApi?.name ?? "";
+    },
+    selectedCategoryKey(key) {
+      this.ensureGroupExpanded(key);
+    },
+    paramRows: {
+      handler() {
+        if (this.paramsMode === "table") {
+          this.syncParamsObjectFromRows();
+        }
+      },
+      deep: true,
+    },
+    paramsObject: {
+      handler(value) {
+        if (this.paramsMode === "json") {
+          // 如果是有效的对象，清除错误
+          if (
+            value !== null &&
+            value !== undefined &&
+            typeof value === "object" &&
+            !Array.isArray(value)
+          ) {
+            this.paramsError = "";
+          }
+        }
+      },
+      deep: true,
+    },
+  },
+  mounted() {
+    this.initializeParams();
+    window.addEventListener("message", this.handleMessage);
+  },
+  beforeUnmount() {
+    window.removeEventListener("message", this.handleMessage);
+  },
+  methods: {
+    isPlainObject(value) {
+      return (
+        value !== null && typeof value === "object" && !Array.isArray(value)
+      );
+    },
+    rowsToPlainObject() {
+      const params = {};
+      this.paramRows.forEach(({ name, value }) => {
+        if (name) {
+          let finalValue = typeof value === "function" ? value() : value;
+          // 如果值是字符串，尝试解析为JSON（可能是之前序列化的对象）
+          if (typeof finalValue === "string" && finalValue.trim()) {
+            try {
+              const parsed = JSON.parse(finalValue);
+              // 如果解析成功且是对象或数组，使用解析后的值
+              if (typeof parsed === "object" && parsed !== null) {
+                finalValue = parsed;
+              }
+            } catch (e) {
+              // 不是有效的JSON，保持原字符串值
+            }
+          }
+          params[name] = finalValue;
+        }
+      });
+
+      return params;
+    },
+    syncParamsObjectFromRows() {
+      this.paramsObject = this.rowsToPlainObject();
+      this.paramsError = "";
+    },
+    applyObjectToRows(input) {
+      const source = this.isPlainObject(input) ? input : {};
+      const rows = Object.entries(source).map(([name, value]) => ({
+        name,
+        value:
+          typeof value === "object" && value !== null
+            ? JSON.stringify(value)
+            : value ?? "",
+      }));
+
+      this.paramRows =
+        rows.length > 0
+          ? rows
+          : [
+              {
+                name: "",
+                value: "",
+              },
+            ];
+    },
+    initializeParams() {
+      const defaults = this.selectedApi?.params ?? [];
+      this.paramRows = defaults.map(({ name, value }) => ({
+        name,
+        value: typeof value === "function" ? value() : value,
+      }));
+
+      if (!this.paramRows.length) {
+        this.paramRows.push({
+          name: "",
+          value: "",
+        });
+      }
+
+      this.syncParamsObjectFromRows();
+    },
+    resetResponse() {
+      this.responseState.body = "";
+      this.responseState.meta = null;
+      this.responseState.isWaiting = false;
+    },
+    isGroupExpanded(key) {
+      return this.expandedKeys.includes(key);
+    },
+    toggleGroup(key) {
+      const list = [...this.expandedKeys];
+      const index = list.indexOf(key);
+      if (index > -1) {
+        if (list.length > 1) {
+          list.splice(index, 1);
+          this.expandedKeys = list;
+        }
+      } else {
+        list.push(key);
+        this.expandedKeys = list;
+      }
+    },
+    ensureGroupExpanded(key) {
+      if (!key) return;
+      if (!this.isGroupExpanded(key)) {
+        this.expandedKeys = [...this.expandedKeys, key];
+      }
+    },
+    handleSelectApi(categoryKey, apiName) {
+      if (this.selectedCategoryKey !== categoryKey) {
+        this.selectedCategoryKey = categoryKey;
+      }
+      this.selectedApiName = apiName;
+      this.requestName = apiName;
+      this.notes = "";
+      this.paramsError = "";
+      this.ensureGroupExpanded(categoryKey);
+      this.initializeParams();
+      this.resetResponse();
+    },
+    addParamRow() {
+      this.paramRows.push({
+        name: "",
+        value: "",
+      });
+    },
+    removeParamRow(index) {
+      if (this.paramRows.length === 1) return;
+      this.paramRows.splice(index, 1);
+    },
+    setParamsMode(mode) {
+      if (this.paramsMode === mode) return;
+      if (mode === "json") {
+        this.syncParamsObjectFromRows();
+        this.paramsMode = mode;
+      } else {
+        if (!this.isPlainObject(this.paramsObject)) {
+          this.paramsError = "JSON 根节点必须是对象类型";
+          return;
+        }
+        this.applyObjectToRows(this.paramsObject);
+        this.paramsError = "";
+        this.paramsMode = mode;
+      }
+    },
+    resolveParamsForRequest() {
+      if (this.paramsMode === "json") {
+        // 检查paramsObject是否是有效的对象
+        const value = this.paramsObject;
+        console.log(
+          "JSON模式 - paramsObject:",
+          value,
+          "类型:",
+          typeof value,
+          "是数组?",
+          Array.isArray(value)
+        );
+
+        // 如果value是null或undefined，使用空对象
+        if (value === null || value === undefined) {
+          const message = "JSON 根节点必须是对象类型";
+          console.error("参数验证失败:", message);
+          this.paramsError = message;
+          this.responseState.body = message;
+          this.responseState.isWaiting = false;
+          return null;
+        }
+
+        // 检查是否是对象（不是数组）
+        if (typeof value !== "object" || Array.isArray(value)) {
+          const message = "JSON 根节点必须是对象类型";
+          console.error("参数验证失败:", message, "value:", value);
+          this.paramsError = message;
+          this.responseState.body = message;
+          this.responseState.isWaiting = false;
+          return null;
+        }
+
+        // 是有效的对象，清除错误并返回
+        console.log("参数验证通过，返回对象:", value);
+        this.paramsError = "";
+        return value;
+      }
+      // 表格模式下，从表格构建对象，并同步到paramsObject以便JSON模式也能看到
+      this.paramsError = "";
+      const payload = this.rowsToPlainObject();
+      console.log("表格模式 - 返回对象:", payload);
+      // 同步到paramsObject，但不触发错误
+      this.paramsObject = payload;
+      return payload;
+    },
+    handleJsonChange(value) {
+      // v-model会自动更新paramsObject，这里主要做验证和错误处理
+      // 允许null或undefined（编辑器初始化时可能返回）
+      if (value === null || value === undefined) {
+        // 不更新paramsObject，因为v-model已经处理了
+        // 但如果paramsObject是空的，清除错误
+        if (!this.paramsObject || Object.keys(this.paramsObject).length === 0) {
+          this.paramsError = "";
+        }
+        return;
+      }
+
+      // 检查是否是对象（不是数组）
+      if (typeof value !== "object" || Array.isArray(value)) {
+        // 只有在确实是无效类型时才设置错误
+        // 但是，v-model已经更新了paramsObject，所以这里只是设置错误提示
+        this.paramsError = "JSON 根节点必须是对象类型";
+        return;
+      }
+
+      // 是有效的对象，清除错误
+      // paramsObject已经被v-model更新了，这里只需要清除错误
+      this.paramsError = "";
+    },
+    handleJsonError(error) {
+      if (error) {
+        this.paramsError = error.message ?? String(error);
+      } else {
+        this.paramsError = "";
+      }
+    },
+    handleSend() {
+      const frameWindow = this.iframeRef?.contentWindow;
+      if (!frameWindow) {
+        this.responseState.body = "iframe 未加载，请稍后重试。";
+        this.responseState.isWaiting = false;
+        return;
+      }
+
+      // 在发送前，如果是JSON模式，确保paramsObject是最新的
+      if (this.paramsMode === "json") {
+        // v-model应该已经更新了paramsObject，但为了确保，我们不做额外处理
+        // 只需要验证paramsObject是否是有效的对象
+        const value = this.paramsObject;
+        if (value === null || value === undefined) {
+          this.responseState.body = "JSON 根节点必须是对象类型";
+          this.responseState.isWaiting = false;
+          this.paramsError = "JSON 根节点必须是对象类型";
+          return;
+        }
+        if (typeof value !== "object" || Array.isArray(value)) {
+          this.responseState.body = "JSON 根节点必须是对象类型";
+          this.responseState.isWaiting = false;
+          this.paramsError = "JSON 根节点必须是对象类型";
+          return;
+        }
+        // 清除之前的错误
+        this.paramsError = "";
+      }
+
+      const params = this.resolveParamsForRequest();
+      if (params === null) {
+        // resolveParamsForRequest已经设置了错误信息
+        return;
+      }
+
+      this.requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      this.responseState.isWaiting = true;
+      this.responseState.body = "";
+
+      this.timingState.startAt = performance.now();
+      this.responseState.meta = {
+        startedAt: new Date().toISOString(),
+        durationMs: null,
+      };
+
+      const payload = {
+        type: "api-test/request",
+        id: this.requestId,
+        api: this.requestName || this.selectedApi?.name,
+        category: this.selectedCategory?.key,
+        notes: this.notes,
+        params,
+      };
+
+      // 发送消息
+      try {
+        console.log("发送请求:", payload);
+        frameWindow.postMessage(payload, "*");
+        console.log("请求已发送，等待响应...");
+      } catch (error) {
+        console.error("发送消息失败:", error);
+        this.responseState.isWaiting = false;
+        this.responseState.body = `发送消息失败：${error.message}`;
+      }
+    },
+    handleMessage(event) {
+      const data = event.data;
+      console.log("收到消息:", data);
+
+      if (!data || typeof data !== "object") {
+        console.log("消息格式无效，忽略");
+        return;
+      }
+
+      if (data.type !== "api-test/response") {
+        console.log(
+          "消息类型不匹配，期望: api-test/response，实际:",
+          data.type
+        );
+        return;
+      }
+
+      if (!this.requestId || data.id !== this.requestId) {
+        console.log("请求ID不匹配，期望:", this.requestId, "实际:", data.id);
+        return;
+      }
+
+      console.log("收到响应:", data.payload);
+      this.responseState.isWaiting = false;
+      this.responseState.meta = {
+        startedAt: this.responseState.meta?.startedAt ?? null,
+        origin: event.origin,
+        receivedAt: new Date().toISOString(),
+        durationMs: Math.round(performance.now() - this.timingState.startAt),
+      };
+
+      this.responseState.body =
+        typeof data.payload === "string"
+          ? data.payload
+          : JSON.stringify(data.payload, null, 2);
+    },
+  },
+};
 </script>
 
 <template>
