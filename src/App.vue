@@ -1,11 +1,13 @@
 <script>
 import { apiCatalog } from "./data/apiCatalog";
 import JsonEditor from "./components/JsonEditor.vue";
+import FloatingMenu from "./components/FloatingMenu.vue";
 
 export default {
   name: "App",
   components: {
     JsonEditor,
+    FloatingMenu
   },
   data() {
     const catalog = apiCatalog;
@@ -13,6 +15,15 @@ export default {
     const initialApiName = catalog[0]?.apis?.[0]?.name ?? null;
 
     return {
+      floatingMenu: {
+        x: 380,
+        y: 120,
+      },
+      floatingOptions: [
+        { id: "log", label: "打印日志" },
+        { id: "refresh", label: "刷新" },
+        { id: "close", label: "关闭浮层" },
+      ],
       catalog,
       iframeUrl: "/mock-frame.html",
       iframeRef: null,
@@ -417,6 +428,13 @@ export default {
 
 <template>
   <div class="workspace">
+    <FloatingMenu
+      :x="floatingMenu.x"
+      :y="floatingMenu.y"
+      :options="floatingOptions"
+      label="操作"
+      @select="handleFloatingSelect"
+    />
     <aside class="sidebar">
       <div class="sidebar-header">API 列表</div>
       <div class="sidebar-search">
